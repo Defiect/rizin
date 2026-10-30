@@ -1,0 +1,115 @@
+name: Build Arch package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build rizin 0.9.1 package
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel \
+            ca-certificates \
+            capstone \
+            curl \
+            file \
+            libmspack \
+            libzip \
+            lz4 \
+            openssl \
+            python \
+            python-yaml \
+            tree-sitter \
+            xz \
+            xxhash \
+            zlib
+
+      - name: Create PKGBUILD
+        run: |
+          cat > PKGBUILD <<'PKGBUILD'
+          pkgname=rizin
+          pkgver=0.9.1
+          pkgrel=1
+          pkgdesc='Open-source tools to disasm, debug, analyze and manipulate binary files'
+          arch=('x86_64')
+          url='https://rizin.re'
+          license=('GPL3' 'LGPL3')
+          depends=(
+            sh
+            capstone libcapstone.so
+            openssl
+            libzip libzip.so
+            zlib
+            lz4
+            xz
+            xxhash libxxhash.so
+            file libmagic.so
+            tree-sitter libtree-sitter.so
+            libmspack libmspack.so
+          )
+          makedepends=('meson' 'ninja' 'python' 'python-yaml')
+          optdepends=('rz-ghidra: ghidra decompiler plugin')
+          options=('!emptydirs')
+          source=("https://github.com/rizinorg/rizin/releases/download/v${pkgver}/rizin-src-v${pkgver}.tar.xz")
+          sha512sums=('294825194fc564cf0ab339dd8429be9d169412b20b133203511025b8ce5cb2dde1e06caf2547223cbb95dd5c1f98628b22beccced68913e667c7dba65138aa08')
+
+          build() {
+            cd "${pkgname}-v${pkgver}"
+            arch-meson build \
+              -Duse_sys_capstone=enabled \
+              -Duse_capstone_version=v4 \
+              -Duse_sys_magic=enabled \
+              -Duse_sys_libzip=enabled \
+              -Duse_sys_lz4=enabled \
+              -Duse_sys_lzma=enabled \
+              -Duse_sys_zlib=enabled \
+              -Duse_sys_xxhash=enabled \
+              -Duse_sys_openssl=enabled \
+              -Duse_sys_tree_sitter=enabled \
+              -Duse_sys_libmspack=enabled \
+              -Duse_zlib=true \
+              -Duse_lzma=true \
+              -Dlocal=disabled
+            meson compile -C build
+          }
+
+          package() {
+            cd "${pkgname}-v${pkgver}"
+            DESTDIR="${pkgdir}" meson install -C build
+            install -d "${pkgdir}/usr/share/doc/rizin"
+            cp -r doc/* "${pkgdir}/usr/share/doc/rizin"
+          }
+          PKGBUILD
+
+      - name: Build package
+        run: |
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          runuser -u builder -- makepkg --clean --cleanbuild --noconfirm
+
+      - name: Verify package metadata
+        run: |
+          package=$(find . -maxdepth 1 -name 'rizin-*.pkg.tar.zst' -print -quit)
+          test -n "$package"
+          pacman -Qip "$package"
+          pacman -Qlp "$package" | grep -q '^rizin /usr/bin/rizin$'
+
+      - name: Upload pacman package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rizin-0.9.1-arch-x86_64
+          path: |
+            rizin-*.pkg.tar.zst
+            PKGBUILD
+          if-no-files-found: error
